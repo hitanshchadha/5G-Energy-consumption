@@ -7,10 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
-# Force UTF-8 encoding for standard output to support emojis in Windows terminals
 sys.stdout.reconfigure(encoding='utf-8')
 
-# Import everything we need from LSTM.py
 from LSTM import (
     EnergyPredictorAttention,
     recommend_es_mode,
@@ -24,18 +22,14 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
     eng = matlab.engine.start_matlab()
     print("MATLAB Engine Connected! 5G Environment is live.\n")
     
-    # Initialize variables
     target_bs = 'B_0'
     bs_encoded_id = le_bs.transform([target_bs])[0]
     
-    # In a real scenario, this is our lookback window data
-    # For simulation, we'll initialize a dummy 24-hour history array
     historical_dynamic = np.zeros((24, 11)) 
-    static_data = np.array([4.0, 6.87, 20.0]) # Antennas, TXPower, Bandwidth
+    static_data = np.array([4.0, 6.87, 20.0])
     
-    current_es_modes = [0.0]*6 # Start with no sleep modes active
+    current_es_modes = [0.0]*6
     
-    # Arrays to track metrics for plotting
     history_hours = []
     history_load = []
     history_power = []
@@ -43,18 +37,11 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
     history_active_modes = []
     
     try:
-        # Simulate a 24-hour run to hit the midday peak
         for hour in range(24):
             clock_hour = hour % 24
             print(f"{'='*40}")
             print(f"🕒 TIME: {clock_hour}:00")
             
-            # ---------------------------------------------------------
-            # 1. READ FROM PHYSICAL WORLD (MATLAB)
-            # ---------------------------------------------------------
-            # We pass the current ES modes (array) to MATLAB, and MATLAB returns 
-            # the load it experienced, the power it used, and if any calls dropped.
-            # nargout=3 tells Python to expect 3 return variables.
             actual_load, power_consumed, dropped_calls = eng.step5GDigitalTwin(
                 matlab.double(current_es_modes), 
                 float(clock_hour), 
@@ -65,28 +52,21 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
             if dropped_calls > 0:
                 print(f"⚠️  WARNING: {dropped_calls:.1f}% CALLS DROPPED! SLEEP MODE TOO DEEP!")
 
-            # ---------------------------------------------------------
-            # 2. AI OPTIMIZATION PHASE (PYTHON)
-            # ---------------------------------------------------------
-            # Update our historical window with the new reality
             scaled_actual_load = scaler.transform(np.array([[actual_load, 0, 0, 0]]))[0, 0]
             
-            # Predict cyclical time features for the NEXT hour
             next_hour = (clock_hour + 1) % 24
             next_time_features = np.array([
                 np.sin(2 * np.pi * next_hour / 24.0), np.cos(2 * np.pi * next_hour / 24.0),
-                0.0, 1.0 # Dummy day of week
+                0.0, 1.0
             ])
             
             print("🧠 [RIC Optimizer] Running AI Energy Fingerprint model...")
             
-            # Call the recommender function we wrote earlier
             optimal_combo, expected_power = recommend_es_mode(
                 model, bs_encoded_id, historical_dynamic, static_data, 
                 scaled_actual_load, actual_load, target_scaler, next_time_features
             )
             
-            # Convert binary combo to array of modes
             next_es_modes = list(optimal_combo)
             active_modes = [i+1 for i, m in enumerate(next_es_modes) if m == 1.0]
             
@@ -97,22 +77,16 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
                 
             print(f"⚙️  [RIC Decision] Sending Command -> ACTIVATE ES_MODES: [{mode_str}]")
             
-            # Track history for graphing
             history_hours.append(clock_hour)
             history_load.append(actual_load * 100)
             history_power.append(power_consumed)
             history_dropped.append(dropped_calls)
             history_active_modes.append(max(active_modes) if active_modes else 0)
             
-            # ---------------------------------------------------------
-            # 3. APPLY ACTION FOR NEXT LOOP
-            # ---------------------------------------------------------
             current_es_modes = next_es_modes
             
-            # Shift history array and append newest data (Simplified)
             historical_dynamic = np.roll(historical_dynamic, -1, axis=0)
             
-            # Wait 2 seconds so you can watch the simulation run in the terminal
             time.sleep(2) 
             
     except KeyboardInterrupt:
@@ -121,11 +95,9 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
         eng.quit()
         print("MATLAB Engine shut down.")
         
-        # Draw the relevant graphs
         print("\n📊 Generating simulation performance graphs...")
         plt.figure(figsize=(12, 10))
         
-        # 1. Load vs Dropped Calls
         plt.subplot(3, 1, 1)
         plt.plot(history_hours, history_load, label="Network Load (%)", color='blue', marker='o')
         plt.bar(history_hours, history_dropped, label="Dropped Calls (Penalty)", color='red', alpha=0.6)
@@ -134,7 +106,6 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
         plt.legend()
         plt.grid(True)
         
-        # 2. Energy Consumption
         plt.subplot(3, 1, 2)
         plt.plot(history_hours, history_power, label="Actual Energy Consumed (W)", color='green', marker='s')
         plt.title("24-Hour Energy Consumption")
@@ -142,7 +113,6 @@ def start_oran_controller(model, le_bs, scaler, target_scaler):
         plt.legend()
         plt.grid(True)
         
-        # 3. Sleep Modes
         plt.subplot(3, 1, 3)
         plt.step(history_hours, history_active_modes, label="Max Active ES Mode (0=Normal, 6=Deep Sleep)", color='purple', where='mid')
         plt.title("AI-Selected Energy Saving Mode Over Time")
@@ -166,8 +136,6 @@ if __name__ == "__main__":
     model_path = "trained_model.pth"
     if os.path.exists(model_path):
         print(f"Loading previously trained model from {model_path}...")
-        # Since the model might have been saved on a different device or same device, 
-        # map_location='cpu' ensures it loads safely.
         trained_model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
         trained_model.eval()
         print("Model loaded successfully!\n")
@@ -179,7 +147,6 @@ if __name__ == "__main__":
         print("Training model... (This will take a moment)")
         trained_model = train_model(trained_model, train_loader, epochs=10)
         
-        # Save the trained weights for future use
         torch.save(trained_model.state_dict(), model_path)
         print(f"Model Training Complete and saved to {model_path}!\n")
     
